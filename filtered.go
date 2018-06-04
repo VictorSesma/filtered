@@ -19,7 +19,9 @@ var JokesCache = cache.New(cache.NoExpiration, cache.NoExpiration)
 // CacheIndex Init
 var CacheIndex = cache.New(-1, -1)
 
-// Joke have the content of the jSon coming from the API
+var fileName = "jokes.json"
+
+// Joke struct holds the jSon structure
 type Joke struct {
 	Type  string
 	Value struct {
@@ -29,7 +31,7 @@ type Joke struct {
 	}
 }
 
-// Gets the last joke from the cache system
+// Last downloaded joke ID
 func lastJoke() int {
 	var lastJoke int
 	lastJokeCache, found := CacheIndex.Get("lastJoke")
@@ -37,13 +39,15 @@ func lastJoke() int {
 		lastJoke = lastJokeCache.(int)
 	}
 	CacheIndex.Set("lastJoke", lastJoke+1, cache.NoExpiration) // Updates the Joke
-	fmt.Println("JokeID is: ", lastJoke)
+	// fmt.Println("JokeID is: ", lastJoke)
 	return lastJoke
 }
 
+// Downloads the Joke from the API
 func getJoke() Joke {
-	lastJokeID := lastJoke() + 1
+	lastJokeID := lastJoke() // Last joke id
 	var m Joke
+	// Downloading joke from the API
 	url := "http://api.icndb.com/jokes/" + strconv.Itoa(lastJokeID)
 	response, err := http.Get(url)
 	if err != nil {
@@ -51,34 +55,28 @@ func getJoke() Joke {
 		os.Exit(1)
 	}
 	defer response.Body.Close()
+	// Reading the response
 	contents, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		fmt.Printf("%s", err)
-		os.Exit(1)
-	} else {
-		json.Unmarshal(contents, &m)
-		if m.Type == "success" {
-			jsonString, err := json.Marshal(m.Value)
-			if err == nil {
-				if x, found := JokesCache.Get("cachedJokes"); found {
-					cachedJokes := x.(string)
-					JokesCache.Set("cachedJokes", cachedJokes+string(jsonString)+",\n", cache.DefaultExpiration)
-					// if x, found := JokesCache.Get("cachedJokes"); found {
-					// 	fmt.Println("ddd")
-					// 	fmt.Println("x is: ", x)
-					// } else {
-					// 	fmt.Println("found is: ", found)
-					// }
-					//writeJokesToFile()
-				} else {
-					fmt.Println("found not found: ", found)
-				}
+	check(err)
+	// From byte to struct
+	json.Unmarshal(contents, &m)
+	// If the API return value is success we save the Joke in the API
+	if m.Type == "success" {
+		jsonString, err := json.Marshal(m.Value)
+		if err == nil {
+			if x, found := JokesCache.Get("cachedJokes"); found {
+				cachedJokes := x.(string)
+				JokesCache.Set("cachedJokes", cachedJokes+string(jsonString)+",\n", cache.DefaultExpiration)
+				fmt.Println("Joke into cache: ", string(jsonString))
 			} else {
-				fmt.Println("jSon error: ", err)
+				panic("There is a problem with the cache (cachedJokes)")
 			}
+		} else {
+			panic(err)
 		}
+	} else {
+		fmt.Println("API error: ", m)
 	}
-	fmt.Println(m)
 	return m
 }
 
@@ -88,48 +86,60 @@ func check(e error) {
 	}
 }
 
+// Takes the jokes from the cache system and writes it to a file
 func writeJokesToFile() {
-	fmt.Println("lets going to create the file")
+	fmt.Println("Updating file and cleaning cache")
 	if str, found := JokesCache.Get("cachedJokes"); found {
-		if _, err := os.Stat("jokes.json"); os.IsNotExist(err) { // Creating the file
-			fmt.Println("file created")
-			file, err := os.Create("jokes.json")
+		if _, err := os.Stat(fileName); os.IsNotExist(err) { // Creating the file if not exist
+			file, err := os.Create(fileName)
 			check(err)
 			file.Close()
 		}
-		fileJokes, err := ioutil.ReadFile("jokes.json")
+		fileJokes, err := ioutil.ReadFile(fileName) // Opening the file
 		check(err)
+		// Formating the string properly
 		fileJokesString := strings.TrimRight(string(fileJokes), "]")
 		fileJokesString = strings.TrimLeft(fileJokesString, "[")
 		writeStr := fileJokesString + "," + str.(string)
 		writeStr = strings.TrimRight(writeStr, ",\n")
 		writeStr = strings.TrimLeft(writeStr, ",")
 		writeStr = "[" + writeStr + "]"
-		err = ioutil.WriteFile("jokes.json", []byte(writeStr), 0666)
+		// Writing the jSon to the file
+		err = ioutil.WriteFile(fileName, []byte(writeStr), 0666)
 		check(err)
+		// Cleaning the cache
 		JokesCache.Set("cachedJokes", "", cache.NoExpiration)
 	} else {
-		fmt.Println("found is: ", found)
+		panic("There is a problem with the cache (cachedJokes)")
 	}
 }
 
+// The program keeps executing forever
 func blockForever() {
 	select {}
 }
 
 func main() {
+	// Removes old file if exist
+	os.Remove(fileName)
+	// Inits cache into empty string
 	JokesCache.Set("cachedJokes", "", cache.DefaultExpiration)
+
+	// Ticker for the getJoke func executed as goroutine
 	getJokeTicker := time.NewTicker(3 * time.Second)
 	go func() {
 		for range getJokeTicker.C {
 			getJoke()
 		}
 	}()
+
+	// Ticker for the writeJokesToFile func executed as goroutine
 	writeJokeTicker := time.NewTicker(60 * time.Second)
 	go func() {
 		for range writeJokeTicker.C {
 			writeJokesToFile()
 		}
 	}()
+	// Execute progam "forever"
 	blockForever()
 }
